@@ -95,13 +95,9 @@ def share_keyboard(link):
 def welcome_text(link):
     return (
         "🎓 *A Week of 8-9 Graders* marafoniga xush kelibsiz!\n\n"
-        "Bir hafta davomida nufuzli maktablar, litseylar va dastur vakillari "
-        "bilan jonli muloqotlar bo'lib o'tadi.\n\n"
-        f"🔐 Maxsus chatga kirish uchun *{REQUIRED_INVITES} ta do'stingizni* "
-        "taklif qiling.\n\n"
-        f"🔗 Sizning shaxsiy havolangiz:\n`{link}`\n\n"
-        "Havolani do'stlaringizga yuboring — ular botga kirishi bilan "
-        "hisobingizga qo'shiladi. /status orqali jarayonni kuzating."
+        f"🔐 Maxsus chatga kirish uchun *{REQUIRED_INVITES} ta do'stingizni* taklif qiling.\n\n"
+        "📨 Quyidagi tayyor postni do'stlaringizga *forward qiling* — "
+        "ular sizning havolangiz orqali qo'shilishadi. /status — jarayonni kuzatish 👇"
     )
 
 def progress_text(invites):
@@ -140,24 +136,23 @@ def get_setting(conn, key):
     r = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
     return r[0] if r else None
 
-async def send_forwardable_post(context, user_id, link):
+async def send_main_post(context, user_id, link):
+    """The announcement (poster + text + personal link + share button)."""
     conn = db()
     poster = get_setting(conn, "poster_file_id")
     conn.close()
-    await context.bot.send_message(
-        user_id,
-        "📨 Quyidagi tayyor postni do'stlaringizga *forward qiling* — "
-        "ular sizning havolangiz orqali qo'shilishadi:",
-        parse_mode="Markdown",
-    )
-    if poster:
-        await context.bot.send_photo(
-            user_id, poster,
-            caption=ANNOUNCEMENT_SHORT.format(link=link), parse_mode="Markdown",
-        )
-    else:
-        await context.bot.send_message(user_id, ANNOUNCEMENT.format(link=link),
-                                       parse_mode="Markdown")
+    caption = ANNOUNCEMENT_SHORT.format(link=link)
+    try:
+        if poster:
+            await context.bot.send_photo(user_id, poster, caption=caption,
+                                         parse_mode="Markdown",
+                                         reply_markup=share_keyboard(link))
+            return
+    except Exception as e:
+        log.warning(f"send poster failed: {e}")
+    await context.bot.send_message(user_id, ANNOUNCEMENT.format(link=link),
+                                   parse_mode="Markdown",
+                                   reply_markup=share_keyboard(link))
 
 async def setposter_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -173,7 +168,12 @@ async def poster_receiver(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.photo:
         file_id = update.message.photo[-1].file_id
     elif update.message.document and (update.message.document.mime_type or "").startswith("image/"):
-        file_id = update.message.document.file_id
+        # document file_id can't be used with send_photo -> convert by re-uploading
+        tg_file = await update.message.document.get_file()
+        data = bytes(await tg_file.download_as_bytearray())
+        sent = await context.bot.send_photo(update.effective_user.id, data,
+                                            caption="🖼 Poster (preview)")
+        file_id = sent.photo[-1].file_id
     if not file_id:
         await update.message.reply_text("❗️ Rasm topilmadi, qayta yuboring.")
         return
@@ -337,11 +337,8 @@ async def region_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
     link = ref_link(context.bot.username, q.from_user.id)
     await q.message.edit_text(f"📍 {region} ✅")
-    await q.message.reply_text(
-        welcome_text(link), parse_mode="Markdown",
-        reply_markup=share_keyboard(link),
-    )
-    await send_forwardable_post(context, q.from_user.id, link)
+    await q.message.reply_text(welcome_text(link), parse_mode="Markdown")
+    await send_main_post(context, q.from_user.id, link)
 
 def is_registered(conn, user_id) -> bool:
     r = conn.execute("SELECT reg_step FROM users WHERE user_id=?", (user_id,)).fetchone()
@@ -393,9 +390,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await credit_referrer_if_due(context, conn, user.id)
     link = ref_link(context.bot.username, user.id)
-    await update.message.reply_text(welcome_text(link), parse_mode="Markdown",
-                                    reply_markup=share_keyboard(link))
     conn.close()
+    await update.message.reply_text(welcome_text(link), parse_mode="Markdown")
+    await send_main_post(context, user.id, link)
 
 async def check_sub_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -409,8 +406,8 @@ async def check_sub_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await credit_referrer_if_due(context, conn, q.from_user.id)
         conn.close()
         link = ref_link(context.bot.username, q.from_user.id)
-        await q.message.reply_text(welcome_text(link), parse_mode="Markdown",
-                                   reply_markup=share_keyboard(link))
+        await q.message.reply_text(welcome_text(link), parse_mode="Markdown")
+        await send_main_post(context, q.from_user.id, link)
     else:
         await q.answer("Hali obuna bo'lmagansiz 🙂", show_alert=True)
 
@@ -439,7 +436,7 @@ async def post_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Avval /start bosing.")
         return
     link = ref_link(context.bot.username, update.effective_user.id)
-    await send_forwardable_post(context, update.effective_user.id, link)
+    await send_main_post(context, update.effective_user.id, link)
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
