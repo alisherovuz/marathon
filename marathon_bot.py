@@ -90,7 +90,7 @@ from urllib.parse import quote
 def share_keyboard(link):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📤 Do'stlarga ulashish", switch_inline_query="taklif")],
-        [InlineKeyboardButton(f"💳 {PAYMENT_AMOUNT} so'm bilan qo'shilish", callback_data="paid_join")],
+        [InlineKeyboardButton("❤️ Xayriya orqali qo'shilish", callback_data="paid_join")],
     ])
 
 # ---------- Texts (Uzbek) ----------
@@ -99,7 +99,7 @@ def welcome_text(link):
     return (
         "🎓 *A Week of 8-9 Graders* marafoniga xush kelibsiz!\n\n"
         f"🔐 Maxsus chatga kirish uchun *{REQUIRED_INVITES} ta do'stingizni* taklif qiling "
-        "yoki pastdagi tugma orqali to'lov bilan qo'shiling (mablag' xayriyaga yo'naltiriladi).\n\n"
+        "yoki ❤️ xayriya orqali qo'shiling — mablag' to'liq xayriyaga yo'naltiriladi.\n\n"
         "📨 Quyidagi tayyor postni do'stlaringizga *forward qiling* — "
         "ular sizning havolangiz orqali qo'shilishadi. /status — jarayonni kuzatish 👇"
     )
@@ -413,10 +413,14 @@ async def paid_join_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     conn.commit()
     conn.close()
     await q.message.reply_text(
-        f"💳 <b>{PAYMENT_AMOUNT} so'm</b> to'lov qiling (mablag' xayriyaga yo'naltiriladi):\n\n"
-        f"<code>{PAYMENT_CARD}</code>\n\n"
+        "❤️ <b>Xayriya orqali qo'shilish</b>\n\n"
+        f"Agar do'st taklif qilish imkoni bo'lmasa, <b>{PAYMENT_AMOUNT} so'm</b> "
+        "xayriya qilib marafonga qo'shilishingiz mumkin.\n\n"
+        "🤝 Yig'ilgan barcha mablag' <b>to'liq xayriyaga</b> — yordamga muhtoj "
+        "bolalarning ta'limini qo'llab-quvvatlashga yo'naltiriladi.\n\n"
+        f"💳 Karta:\n<code>{PAYMENT_CARD}</code>\n\n"
         "✅ To'lovdan so'ng chek (screenshot)ni shu yerga yuboring — "
-        "admin tasdiqlagach, sizga maxsus chat havolasi keladi.",
+        "tasdiqlangach, sizga maxsus chat havolasi keladi.",
         parse_mode="HTML",
     )
 
