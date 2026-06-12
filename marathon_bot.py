@@ -242,9 +242,27 @@ async def credit_referrer_if_due(context, conn, user_id):
     invites, unlocked = r[4], r[5]
     try:
         if invites >= REQUIRED_INVITES and not unlocked:
+            try:
+                one_time = await get_or_create_invite(context, conn, referrer_id)
+            except Exception as e:
+                log.error(f"invite link creation FAILED for {referrer_id}: {e}")
+                if ADMIN_ID:
+                    try:
+                        await context.bot.send_message(
+                            ADMIN_ID,
+                            f"⚠️ Havola yaratib bo'lmadi (user {referrer_id}): {e}\n"
+                            "Bot maxsus chatda admin ekanini va PRIVATE_CHAT_ID to'g'riligini tekshiring.",
+                        )
+                    except Exception:
+                        pass
+                await context.bot.send_message(
+                    referrer_id,
+                    f"🎉 Siz {invites} ta do'stingizni taklif qildingiz! "
+                    "Havolangiz tayyorlanmoqda — birozdan so'ng /status ni bosing.",
+                )
+                return
             conn.execute("UPDATE users SET unlocked=1 WHERE user_id=?", (referrer_id,))
             conn.commit()
-            one_time = await get_or_create_invite(context, conn, referrer_id)
             await context.bot.send_message(
                 referrer_id,
                 UNLOCK_TEXT.format(n=invites, link=one_time),
@@ -424,9 +442,15 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     invites, unlocked = row[4], row[5]
     link = ref_link(context.bot.username, update.effective_user.id)
     msg = progress_text(min(invites, REQUIRED_INVITES)) + f"\n\n🔗 Havolangiz:\n`{link}`"
-    if unlocked:
-        one_time = await get_or_create_invite(context, conn, update.effective_user.id)
-        msg += f"\n\n🔓 Sizning shaxsiy chat havolangiz (faqat 1 marta ishlaydi):\n{one_time}"
+    if unlocked or invites >= REQUIRED_INVITES:
+        try:
+            one_time = await get_or_create_invite(context, conn, update.effective_user.id)
+            conn.execute("UPDATE users SET unlocked=1 WHERE user_id=?", (update.effective_user.id,))
+            conn.commit()
+            msg += f"\n\n🔓 Sizning shaxsiy chat havolangiz (faqat 1 marta ishlaydi):\n{one_time}"
+        except Exception as e:
+            log.error(f"status invite link failed for {update.effective_user.id}: {e}")
+            msg += "\n\n⚠️ Chat havolasini yaratishda xatolik. Birozdan so'ng qayta urinib ko'ring."
     conn.close()
     await update.message.reply_text(msg, parse_mode="Markdown",
                                     reply_markup=share_keyboard(link))
