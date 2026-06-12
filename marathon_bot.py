@@ -141,7 +141,8 @@ async def send_main_post(context, user_id, link):
     conn = db()
     poster = get_setting(conn, "poster_file_id")
     conn.close()
-    caption = ANNOUNCEMENT_SHORT.format(link=link)
+    link_md = link.replace("_", "\\_")  # underscores break Markdown parsing
+    caption = ANNOUNCEMENT_SHORT.format(link=link_md)
     try:
         if poster:
             await context.bot.send_photo(user_id, poster, caption=caption,
@@ -150,7 +151,7 @@ async def send_main_post(context, user_id, link):
             return
     except Exception as e:
         log.warning(f"send poster failed: {e}")
-    await context.bot.send_message(user_id, ANNOUNCEMENT.format(link=link),
+    await context.bot.send_message(user_id, ANNOUNCEMENT.format(link=link_md),
                                    parse_mode="Markdown",
                                    reply_markup=share_keyboard(link))
 
