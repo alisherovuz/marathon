@@ -23,10 +23,11 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 import uvicorn
 
 from telegram import (Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot,
-    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove)
+    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
+    InlineQueryResultCachedPhoto, InlineQueryResultArticle, InputTextMessageContent)
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler, ContextTypes,
-    MessageHandler, filters
+    MessageHandler, InlineQueryHandler, filters
 )
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
@@ -85,9 +86,8 @@ REGIONS = [
 from urllib.parse import quote
 
 def share_keyboard(link):
-    share_text = quote("🎓 A Week of 8-9 Graders marafoniga qo'shil! Nufuzli maktablar va litseylar bilan jonli muloqotlar:")
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("📤 Do'stlarga ulashish", url=f"https://t.me/share/url?url={quote(link)}&text={share_text}")
+        InlineKeyboardButton("📤 Do'stlarga ulashish", switch_inline_query="taklif")
     ]])
 
 # ---------- Texts (Uzbek) ----------
@@ -368,6 +368,30 @@ def is_registered(conn, user_id) -> bool:
     r = conn.execute("SELECT reg_step FROM users WHERE user_id=?", (user_id,)).fetchone()
     return bool(r and r[0] == "done")
 
+async def inline_share(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """User taps share button -> picks a chat -> full post (photo+text+their link) is sent."""
+    user_id = update.inline_query.from_user.id
+    link = ref_link(context.bot.username, user_id)
+    conn = db()
+    poster = get_setting(conn, "poster_file_id")
+    conn.close()
+    caption = ANNOUNCEMENT_SHORT.format(link=link)
+    if poster:
+        results = [InlineQueryResultCachedPhoto(
+            id=f"post{user_id}",
+            photo_file_id=poster,
+            caption=caption,
+            parse_mode="HTML",
+        )]
+    else:
+        results = [InlineQueryResultArticle(
+            id=f"post{user_id}",
+            title="📨 Marafon postini yuborish",
+            description="Rasm + shaxsiy havolangiz bilan",
+            input_message_content=InputTextMessageContent(caption, parse_mode="HTML"),
+        )]
+    await update.inline_query.answer(results, cache_time=1, is_personal=True)
+
 # ---------- Handlers ----------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -635,6 +659,7 @@ def main():
     app.add_handler(CommandHandler("post", post_cmd))
     app.add_handler(CommandHandler("setposter", setposter_cmd))
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, poster_receiver))
+    app.add_handler(InlineQueryHandler(inline_share))
     app.add_handler(CallbackQueryHandler(check_sub_callback, pattern="^check_sub$"))
     app.add_handler(CallbackQueryHandler(region_callback, pattern="^reg:"))
     app.add_handler(MessageHandler((filters.TEXT | filters.CONTACT) & ~filters.COMMAND, registration_handler))
