@@ -245,15 +245,6 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append(f"• {name} (@{uname}) — {inv}")
     await update.message.reply_text("\n".join(lines))
 
-def main():
-    app = Application.builder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("status", status))
-    app.add_handler(CommandHandler("stats", stats))
-    app.add_handler(CallbackQueryHandler(check_sub_callback, pattern="^check_sub$"))
-    log.info("Marathon bot running...")
-    app.run_polling(allowed_updates=Update.ALL_UPDATES)
-
 # ================= WEB ADMIN PANEL =================
 
 web = FastAPI()
@@ -405,7 +396,7 @@ def main():
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CallbackQueryHandler(check_sub_callback, pattern="^check_sub$"))
     log.info(f"Marathon bot running, admin panel on :{PORT}/admin")
-    app.run_polling(allowed_updates=Update.ALL_UPDATES)
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
     main()
