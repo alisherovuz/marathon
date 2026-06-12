@@ -188,8 +188,8 @@ async def poster_receiver(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Poster saqlandi! Endi /post rasm bilan chiqadi.")
 
 UNLOCK_TEXT = (
-    "🎉 *Tabriklaymiz!* Siz {n} ta do'stingizni taklif qildingiz.\n\n"
-    "Mana maxsus chatga havola:\n{link}\n\n"
+    "🎉 <b>Tabriklaymiz!</b> {friend} qo'shildi — siz {n} ta do'stingizni taklif qildingiz!\n\n"
+    "🔓 Mana maxsus chatga shaxsiy havolangiz (faqat 1 marta ishlaydi):\n{link}\n\n"
     "Marafonda ko'rishguncha! 🚀"
 )
 
@@ -238,6 +238,8 @@ async def credit_referrer_if_due(context, conn, user_id):
     conn.execute("UPDATE users SET credited=1 WHERE user_id=?", (user_id,))
     conn.execute("UPDATE users SET invites = invites + 1 WHERE user_id=?", (referrer_id,))
     conn.commit()
+    friend = get_user(conn, user_id)
+    friend_name = (friend[2] or "Do'stingiz") if friend else "Do'stingiz"
     r = get_user(conn, referrer_id)
     invites, unlocked = r[4], r[5]
     try:
@@ -265,13 +267,14 @@ async def credit_referrer_if_due(context, conn, user_id):
             conn.commit()
             await context.bot.send_message(
                 referrer_id,
-                UNLOCK_TEXT.format(n=invites, link=one_time),
-                parse_mode="Markdown",
+                UNLOCK_TEXT.format(n=invites, link=one_time, friend=friend_name),
+                parse_mode="HTML",
             )
         else:
             await context.bot.send_message(
                 referrer_id,
-                f"➕ Yangi do'stingiz qo'shildi!\n{progress_text(min(invites, REQUIRED_INVITES))}",
+                f"➕ {friend_name} sizning havolangiz orqali qo'shildi!\n"
+                f"{progress_text(min(invites, REQUIRED_INVITES))}",
             )
     except Exception as e:
         log.warning(f"notify referrer failed: {e}")
@@ -441,7 +444,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     invites, unlocked = row[4], row[5]
     link = ref_link(context.bot.username, update.effective_user.id)
-    msg = progress_text(min(invites, REQUIRED_INVITES)) + f"\n\n🔗 Havolangiz:\n`{link}`"
+    msg = progress_text(min(invites, REQUIRED_INVITES)) + f"\n\n🔗 Havolangiz:\n<code>{link}</code>"
     if unlocked or invites >= REQUIRED_INVITES:
         try:
             one_time = await get_or_create_invite(context, conn, update.effective_user.id)
@@ -452,7 +455,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             log.error(f"status invite link failed for {update.effective_user.id}: {e}")
             msg += "\n\n⚠️ Chat havolasini yaratishda xatolik. Birozdan so'ng qayta urinib ko'ring."
     conn.close()
-    await update.message.reply_text(msg, parse_mode="Markdown",
+    await update.message.reply_text(msg, parse_mode="HTML",
                                     reply_markup=share_keyboard(link))
 
 async def post_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
