@@ -37,6 +37,8 @@ CHANNEL_USERNAMES = [c.strip() for c in os.environ.get("CHANNEL_USERNAMES", "").
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
 REQUIRED_INVITES = 2
 DB_PATH = os.environ.get("DB_PATH", "marathon.db")
+PAYMENT_CARD = os.environ.get("PAYMENT_CARD", "")  # e.g. "8600 1234 5678 9012 — Ism Familiya"
+PAYMENT_AMOUNT = os.environ.get("PAYMENT_AMOUNT", "10 000")
 ADMIN_USER = os.environ.get("ADMIN_USER", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")  # required for web panel
 PORT = int(os.environ.get("PORT", "8080"))
@@ -66,7 +68,7 @@ def db():
         conn.execute("ALTER TABLE users ADD COLUMN credited INTEGER DEFAULT 0")
     except sqlite3.OperationalError:
         pass
-    for col in ("phone TEXT", "school TEXT", "reg_step TEXT", "age TEXT", "region TEXT"):
+    for col in ("phone TEXT", "school TEXT", "reg_step TEXT", "age TEXT", "region TEXT", "pay_state TEXT"):
         try:
             conn.execute(f"ALTER TABLE users ADD COLUMN {col}")
         except sqlite3.OperationalError:
@@ -86,16 +88,18 @@ REGIONS = [
 from urllib.parse import quote
 
 def share_keyboard(link):
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("📤 Do'stlarga ulashish", switch_inline_query="taklif")
-    ]])
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📤 Do'stlarga ulashish", switch_inline_query="taklif")],
+        [InlineKeyboardButton(f"💳 {PAYMENT_AMOUNT} so'm bilan qo'shilish", callback_data="paid_join")],
+    ])
 
 # ---------- Texts (Uzbek) ----------
 
 def welcome_text(link):
     return (
         "🎓 *A Week of 8-9 Graders* marafoniga xush kelibsiz!\n\n"
-        f"🔐 Maxsus chatga kirish uchun *{REQUIRED_INVITES} ta do'stingizni* taklif qiling.\n\n"
+        f"🔐 Maxsus chatga kirish uchun *{REQUIRED_INVITES} ta do'stingizni* taklif qiling "
+        "yoki pastdagi tugma orqali to'lov bilan qo'shiling (mablag' xayriyaga yo'naltiriladi).\n\n"
         "📨 Quyidagi tayyor postni do'stlaringizga *forward qiling* — "
         "ular sizning havolangiz orqali qo'shilishadi. /status — jarayonni kuzatish 👇"
     )
@@ -164,8 +168,9 @@ async def setposter_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🖼 Endi poster rasmini yuboring (photo yoki fayl sifatida).")
 
 async def poster_receiver(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Catch the admin's next image after /setposter (photo or image file)."""
+    """Photo router: admin poster upload, or user payment receipt."""
     if update.effective_user.id != ADMIN_ID or not context.user_data.get("awaiting_poster"):
+        await handle_receipt(update, context)
         return
     file_id = None
     if update.message.photo:
@@ -391,6 +396,90 @@ async def inline_share(update: Update, context: ContextTypes.DEFAULT_TYPE):
             input_message_content=InputTextMessageContent(caption, parse_mode="HTML"),
         )]
     await update.inline_query.answer(results, cache_time=1, is_personal=True)
+
+async def paid_join_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if not PAYMENT_CARD:
+        await q.message.reply_text("Hozircha pullik qo'shilish mavjud emas.")
+        return
+    conn = db()
+    row = get_user(conn, q.from_user.id)
+    if row and row[5]:  # already unlocked
+        conn.close()
+        await q.message.reply_text("Sizda allaqachon chat havolasi bor — /status ni bosing 🙂")
+        return
+    conn.execute("UPDATE users SET pay_state='awaiting' WHERE user_id=?", (q.from_user.id,))
+    conn.commit()
+    conn.close()
+    await q.message.reply_text(
+        f"💳 <b>{PAYMENT_AMOUNT} so'm</b> to'lov qiling (mablag' xayriyaga yo'naltiriladi):\n\n"
+        f"<code>{PAYMENT_CARD}</code>\n\n"
+        "✅ To'lovdan so'ng chek (screenshot)ni shu yerga yuboring — "
+        "admin tasdiqlagach, sizga maxsus chat havolasi keladi.",
+        parse_mode="HTML",
+    )
+
+async def handle_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Returns True if this photo was a payment receipt."""
+    user = update.effective_user
+    conn = db()
+    row = conn.execute("SELECT pay_state FROM users WHERE user_id=?", (user.id,)).fetchone()
+    if not row or row[0] != "awaiting":
+        conn.close()
+        return False
+    conn.execute("UPDATE users SET pay_state='review' WHERE user_id=?", (user.id,))
+    conn.commit()
+    conn.close()
+    file_id = update.message.photo[-1].file_id if update.message.photo else update.message.document.file_id
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Tasdiqlash", callback_data=f"pay_ok:{user.id}"),
+        InlineKeyboardButton("❌ Rad etish", callback_data=f"pay_no:{user.id}"),
+    ]])
+    caption = (f"💳 To'lov cheki\nUser: {user.full_name} (@{user.username or '-'})\nID: {user.id}")
+    try:
+        if update.message.photo:
+            await context.bot.send_photo(ADMIN_ID, file_id, caption=caption, reply_markup=kb)
+        else:
+            await context.bot.send_document(ADMIN_ID, file_id, caption=caption, reply_markup=kb)
+        await update.message.reply_text("🕐 Chekingiz qabul qilindi — admin tasdiqlashini kuting.")
+    except Exception as e:
+        log.error(f"receipt forward failed: {e}")
+        await update.message.reply_text("Xatolik yuz berdi, birozdan so'ng qayta yuboring.")
+    return True
+
+async def pay_decision_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if q.from_user.id != ADMIN_ID:
+        return
+    action, uid = q.data.split(":")
+    uid = int(uid)
+    conn = db()
+    if action == "pay_ok":
+        try:
+            one_time = await get_or_create_invite(context, conn, uid)
+            conn.execute("UPDATE users SET unlocked=1, pay_state='paid' WHERE user_id=?", (uid,))
+            conn.commit()
+            await context.bot.send_message(
+                uid,
+                "✅ To'lovingiz tasdiqlandi! Rahmat — mablag' xayriyaga yo'naltiriladi. 🤝\n\n"
+                f"🔓 Maxsus chatga shaxsiy havolangiz (faqat 1 marta ishlaydi):\n{one_time}",
+            )
+            await q.message.edit_caption(caption=q.message.caption + "\n\n✅ TASDIQLANDI")
+        except Exception as e:
+            log.error(f"paid unlock failed for {uid}: {e}")
+            await q.message.reply_text(f"⚠️ Havola yaratishda xato: {e}")
+    else:
+        conn.execute("UPDATE users SET pay_state=NULL WHERE user_id=?", (uid,))
+        conn.commit()
+        try:
+            await context.bot.send_message(
+                uid, "❌ To'lov tasdiqlanmadi. Savol bo'lsa admin bilan bog'laning yoki chekni qayta yuboring.")
+        except Exception:
+            pass
+        await q.message.edit_caption(caption=q.message.caption + "\n\n❌ RAD ETILDI")
+    conn.close()
 
 # ---------- Handlers ----------
 
@@ -662,6 +751,8 @@ def main():
     app.add_handler(InlineQueryHandler(inline_share))
     app.add_handler(CallbackQueryHandler(check_sub_callback, pattern="^check_sub$"))
     app.add_handler(CallbackQueryHandler(region_callback, pattern="^reg:"))
+    app.add_handler(CallbackQueryHandler(paid_join_callback, pattern="^paid_join$"))
+    app.add_handler(CallbackQueryHandler(pay_decision_callback, pattern="^pay_(ok|no):"))
     app.add_handler(MessageHandler((filters.TEXT | filters.CONTACT) & ~filters.COMMAND, registration_handler))
     log.info(f"Marathon bot running, admin panel on :{PORT}/admin")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
