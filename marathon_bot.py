@@ -70,6 +70,7 @@ def db():
             conn.execute(f"ALTER TABLE users ADD COLUMN {col}")
         except sqlite3.OperationalError:
             pass
+    conn.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
     return conn
 
 def get_user(conn, uid):
@@ -124,15 +125,64 @@ ANNOUNCEMENT = (
     "{link}"
 )
 
+ANNOUNCEMENT_SHORT = (
+    "🎓 *8–9-sinfdan keyin: litseymi, xususiy maktabmi yoki Prezident dasturi?*\n\n"
+    "🚀 O'zbekistondagi 8–9-sinflar uchun eng katta bepul marafon!\n\n"
+    "Bir hafta davomida Prezident iqtidorli farzandlari dasturi, Thompson School, "
+    "Target School, Rahimov School hamda INTERHOUSE, ALWIUT va ALUWED kabi TOP "
+    "litseylarning vakillari bilan jonli muloqotlar: qabul, grantlar, o'qish tizimi "
+    "va ta'lim muhiti — barchasi birinchi shaxslardan. ⚡️\n\n"
+    "📅 20–27-iyun\n\n"
+    "Qatnashish uchun mening havolam orqali ro'yxatdan o'ting 👇\n{link}"
+)
+
+def get_setting(conn, key):
+    r = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+    return r[0] if r else None
+
 async def send_forwardable_post(context, user_id, link):
+    conn = db()
+    poster = get_setting(conn, "poster_file_id")
+    conn.close()
     await context.bot.send_message(
         user_id,
         "📨 Quyidagi tayyor postni do'stlaringizga *forward qiling* — "
         "ular sizning havolangiz orqali qo'shilishadi:",
         parse_mode="Markdown",
     )
-    await context.bot.send_message(user_id, ANNOUNCEMENT.format(link=link),
-                                   parse_mode="Markdown")
+    if poster:
+        await context.bot.send_photo(
+            user_id, poster,
+            caption=ANNOUNCEMENT_SHORT.format(link=link), parse_mode="Markdown",
+        )
+    else:
+        await context.bot.send_message(user_id, ANNOUNCEMENT.format(link=link),
+                                       parse_mode="Markdown")
+
+async def setposter_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    context.user_data["awaiting_poster"] = True
+    await update.message.reply_text("🖼 Endi poster rasmini yuboring (photo yoki fayl sifatida).")
+
+async def poster_receiver(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Catch the admin's next image after /setposter (photo or image file)."""
+    if update.effective_user.id != ADMIN_ID or not context.user_data.get("awaiting_poster"):
+        return
+    file_id = None
+    if update.message.photo:
+        file_id = update.message.photo[-1].file_id
+    elif update.message.document and (update.message.document.mime_type or "").startswith("image/"):
+        file_id = update.message.document.file_id
+    if not file_id:
+        await update.message.reply_text("❗️ Rasm topilmadi, qayta yuboring.")
+        return
+    conn = db()
+    conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('poster_file_id', ?)", (file_id,))
+    conn.commit()
+    conn.close()
+    context.user_data["awaiting_poster"] = False
+    await update.message.reply_text("✅ Poster saqlandi! Endi /post rasm bilan chiqadi.")
 
 UNLOCK_TEXT = (
     "🎉 *Tabriklaymiz!* Siz {n} ta do'stingizni taklif qildingiz.\n\n"
@@ -556,6 +606,8 @@ def main():
     app.add_handler(CommandHandler("status", status))
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CommandHandler("post", post_cmd))
+    app.add_handler(CommandHandler("setposter", setposter_cmd))
+    app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, poster_receiver))
     app.add_handler(CallbackQueryHandler(check_sub_callback, pattern="^check_sub$"))
     app.add_handler(CallbackQueryHandler(region_callback, pattern="^reg:"))
     app.add_handler(MessageHandler((filters.TEXT | filters.CONTACT) & ~filters.COMMAND, registration_handler))
