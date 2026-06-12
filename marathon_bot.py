@@ -329,8 +329,8 @@ async def registration_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
     if step == "age":
         age = (update.message.text or "").strip()
-        if not age.isdigit() or not (8 <= int(age) <= 25):
-            await update.message.reply_text("❗️ Yoshingizni raqamda yozing (masalan: 14).")
+        if not age.isdigit() or not (7 <= int(age) <= 70):
+            await update.message.reply_text("❗️ Yoshingizni raqamda yozing, 7 dan 70 gacha (masalan: 14).")
             conn.close()
             return
         conn.execute("UPDATE users SET age=?, reg_step='region' WHERE user_id=?", (age, user.id))
