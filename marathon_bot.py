@@ -105,7 +105,7 @@ def progress_text(invites):
     return f"📊 Takliflar: {invites}/{REQUIRED_INVITES}  {bar}"
 
 ANNOUNCEMENT = (
-    "🎓 *8–9-sinfdan keyin: litseymi, xususiy maktabmi yoki Prezident dasturi?*\n\n"
+    "🎓 <b>8–9-sinfdan keyin: litseymi, xususiy maktabmi yoki Prezident dasturi?</b>\n\n"
     "Ko'plab o'quvchilar va ota-onalar aynan shu bosqichda muhim tanlov oldida turishadi. "
     "Afsuski, ko'pchilik mavjud imkoniyatlar va foydali loyihalar haqida yetarlicha ma'lumotga ega emas.\n\n"
     "🚀 Shuning uchun biz O'zbekistondagi 8–9-sinflar uchun eng katta bepul marafonni ishga tushirdik!\n\n"
@@ -122,7 +122,7 @@ ANNOUNCEMENT = (
 )
 
 ANNOUNCEMENT_SHORT = (
-    "🎓 *8–9-sinfdan keyin: litseymi, xususiy maktabmi yoki Prezident dasturi?*\n\n"
+    "🎓 <b>8–9-sinfdan keyin: litseymi, xususiy maktabmi yoki Prezident dasturi?</b>\n\n"
     "🚀 O'zbekistondagi 8–9-sinflar uchun eng katta bepul marafon!\n\n"
     "Bir hafta davomida Prezident iqtidorli farzandlari dasturi, Thompson School, "
     "Target School, Rahimov School hamda INTERHOUSE, ALWIUT va ALUWED kabi TOP "
@@ -141,19 +141,21 @@ async def send_main_post(context, user_id, link):
     conn = db()
     poster = get_setting(conn, "poster_file_id")
     conn.close()
-    link_md = link.replace("_", "\\_")  # underscores break Markdown parsing
-    caption = ANNOUNCEMENT_SHORT.format(link=link_md)
+    caption = ANNOUNCEMENT_SHORT.format(link=link)
     try:
         if poster:
             await context.bot.send_photo(user_id, poster, caption=caption,
-                                         parse_mode="Markdown",
+                                         parse_mode="HTML",
                                          reply_markup=share_keyboard(link))
             return
     except Exception as e:
         log.warning(f"send poster failed: {e}")
-    await context.bot.send_message(user_id, ANNOUNCEMENT.format(link=link_md),
-                                   parse_mode="Markdown",
-                                   reply_markup=share_keyboard(link))
+    try:
+        await context.bot.send_message(user_id, ANNOUNCEMENT.format(link=link),
+                                       parse_mode="HTML",
+                                       reply_markup=share_keyboard(link))
+    except Exception as e:
+        log.error(f"send announcement failed: {e}")
 
 async def setposter_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
