@@ -107,6 +107,33 @@ def progress_text(invites):
     bar = "✅" * invites + "⬜️" * (REQUIRED_INVITES - invites)
     return f"📊 Takliflar: {invites}/{REQUIRED_INVITES}  {bar}"
 
+ANNOUNCEMENT = (
+    "🎓 *8–9-sinfdan keyin: litseymi, xususiy maktabmi yoki Prezident dasturi?*\n\n"
+    "Ko'plab o'quvchilar va ota-onalar aynan shu bosqichda muhim tanlov oldida turishadi. "
+    "Afsuski, ko'pchilik mavjud imkoniyatlar va foydali loyihalar haqida yetarlicha ma'lumotga ega emas.\n\n"
+    "🚀 Shuning uchun biz O'zbekistondagi 8–9-sinflar uchun eng katta bepul marafonni ishga tushirdik!\n\n"
+    "Bir hafta davom etadigan bu onlayn marafonimizda Prezident iqtidorli farzandlari dasturi, "
+    "Thompson School, Target School, Rahimov School kabi yetakchi xususiy maktablar hamda "
+    "INTERHOUSE, ALWIUT (Westminster) va ALUWED (JIDU) kabi TOP litseylarning vakillari va "
+    "o'quvchilari qatnashishadi.\n\n"
+    "Qatnashuvchilar qabul jarayonlari, grantlar, o'qish tizimi va ta'lim muhiti haqida "
+    "birinchi shaxslardan ma'lumot olish hamda savollariga jonli javob olish imkoniyatiga "
+    "ega bo'ladilar. ⚡️\n\n"
+    "📅 20–27-iyun\n\n"
+    "Marafonda qatnashish uchun mening havolam orqali ro'yxatdan o'ting 👇\n"
+    "{link}"
+)
+
+async def send_forwardable_post(context, user_id, link):
+    await context.bot.send_message(
+        user_id,
+        "📨 Quyidagi tayyor postni do'stlaringizga *forward qiling* — "
+        "ular sizning havolangiz orqali qo'shilishadi:",
+        parse_mode="Markdown",
+    )
+    await context.bot.send_message(user_id, ANNOUNCEMENT.format(link=link),
+                                   parse_mode="Markdown")
+
 UNLOCK_TEXT = (
     "🎉 *Tabriklaymiz!* Siz {n} ta do'stingizni taklif qildingiz.\n\n"
     "Mana maxsus chatga havola:\n{link}\n\n"
@@ -264,6 +291,7 @@ async def region_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         welcome_text(link), parse_mode="Markdown",
         reply_markup=share_keyboard(link),
     )
+    await send_forwardable_post(context, q.from_user.id, link)
 
 def is_registered(conn, user_id) -> bool:
     r = conn.execute("SELECT reg_step FROM users WHERE user_id=?", (user_id,)).fetchone()
@@ -352,6 +380,16 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
     await update.message.reply_text(msg, parse_mode="Markdown",
                                     reply_markup=share_keyboard(link))
+
+async def post_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    conn = db()
+    row = get_user(conn, update.effective_user.id)
+    conn.close()
+    if not row:
+        await update.message.reply_text("Avval /start bosing.")
+        return
+    link = ref_link(context.bot.username, update.effective_user.id)
+    await send_forwardable_post(context, update.effective_user.id, link)
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -517,6 +555,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("status", status))
     app.add_handler(CommandHandler("stats", stats))
+    app.add_handler(CommandHandler("post", post_cmd))
     app.add_handler(CallbackQueryHandler(check_sub_callback, pattern="^check_sub$"))
     app.add_handler(CallbackQueryHandler(region_callback, pattern="^reg:"))
     app.add_handler(MessageHandler((filters.TEXT | filters.CONTACT) & ~filters.COMMAND, registration_handler))
