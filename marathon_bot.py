@@ -37,6 +37,7 @@ CHANNEL_USERNAMES = [c.strip() for c in os.environ.get("CHANNEL_USERNAMES", "").
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
 REQUIRED_INVITES = 2
 DB_PATH = os.environ.get("DB_PATH", "marathon.db")
+TZ_OFFSET_HOURS = int(os.environ.get("TZ_OFFSET_HOURS", "5"))  # Tashkent UTC+5
 PAYMENT_CARD = os.environ.get("PAYMENT_CARD", "")  # e.g. "8600 1234 5678 9012 — Ism Familiya"
 PAYMENT_AMOUNT = os.environ.get("PAYMENT_AMOUNT", "10 000")
 ADMIN_USER = os.environ.get("ADMIN_USER", "admin")
@@ -680,7 +681,7 @@ def api_stats(_: bool = Depends(auth)):
         "credited": conn.execute("SELECT COUNT(*) FROM users WHERE credited=1").fetchone()[0],
         "unlocked": conn.execute("SELECT COUNT(*) FROM users WHERE unlocked=1").fetchone()[0],
         "today": conn.execute(
-            "SELECT COUNT(*) FROM users WHERE DATE(joined_at)=DATE('now')").fetchone()[0],
+            "SELECT COUNT(*) FROM users WHERE DATE(joined_at, ?)=DATE('now', ?)", (f'+{TZ_OFFSET_HOURS} hours', f'+{TZ_OFFSET_HOURS} hours')).fetchone()[0],
     }
     conn.close()
     return out
@@ -691,13 +692,15 @@ def api_users(q: str = "", _: bool = Depends(auth)):
     if q:
         like = f"%{q}%"
         rows = conn.execute(
-            """SELECT user_id, username, full_name, phone, age, region, invites, unlocked, credited, joined_at
+            """SELECT user_id, username, full_name, phone, age, region, invites, unlocked, credited,
+                      datetime(joined_at, ?) AS joined_at
                FROM users WHERE full_name LIKE ? OR username LIKE ? OR region LIKE ? OR CAST(user_id AS TEXT) LIKE ?
-               ORDER BY invites DESC LIMIT 200""", (like, like, like, like)).fetchall()
+               ORDER BY invites DESC LIMIT 200""", (f'+{TZ_OFFSET_HOURS} hours', like, like, like, like)).fetchall()
     else:
         rows = conn.execute(
-            """SELECT user_id, username, full_name, phone, age, region, invites, unlocked, credited, joined_at
-               FROM users ORDER BY invites DESC LIMIT 200""").fetchall()
+            """SELECT user_id, username, full_name, phone, age, region, invites, unlocked, credited,
+                      datetime(joined_at, ?) AS joined_at
+               FROM users ORDER BY invites DESC LIMIT 200""", (f'+{TZ_OFFSET_HOURS} hours',)).fetchall()
     conn.close()
     keys = ["user_id", "username", "full_name", "phone", "age", "region", "invites", "unlocked", "credited", "joined_at"]
     return {"users": [dict(zip(keys, r)) for r in rows]}
@@ -706,7 +709,7 @@ def api_users(q: str = "", _: bool = Depends(auth)):
 def export_csv(_: bool = Depends(auth)):
     conn = db()
     rows = conn.execute(
-        "SELECT user_id, username, full_name, phone, age, region, referrer_id, invites, credited, unlocked, joined_at FROM users"
+        "SELECT user_id, username, full_name, phone, age, region, referrer_id, invites, credited, unlocked, datetime(joined_at, ?) FROM users", (f'+{TZ_OFFSET_HOURS} hours',)
     ).fetchall()
     conn.close()
     buf = io.StringIO()
