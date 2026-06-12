@@ -22,9 +22,11 @@ from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 import uvicorn
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
+from telegram import (Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot,
+    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove)
 from telegram.ext import (
-    Application, CommandHandler, CallbackQueryHandler, ContextTypes
+    Application, CommandHandler, CallbackQueryHandler, ContextTypes,
+    MessageHandler, filters
 )
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
@@ -63,6 +65,11 @@ def db():
         conn.execute("ALTER TABLE users ADD COLUMN credited INTEGER DEFAULT 0")
     except sqlite3.OperationalError:
         pass
+    for col in ("phone TEXT", "school TEXT", "reg_step TEXT"):
+        try:
+            conn.execute(f"ALTER TABLE users ADD COLUMN {col}")
+        except sqlite3.OperationalError:
+            pass
     return conn
 
 def get_user(conn, uid):
@@ -157,6 +164,73 @@ async def credit_referrer_if_due(context, conn, user_id):
     except Exception as e:
         log.warning(f"notify referrer failed: {e}")
 
+
+import re as _re
+
+async def start_registration(update_or_msg, context, conn, user_id):
+    """Ask for phone with a share-contact button."""
+    conn.execute("UPDATE users SET reg_step='phone' WHERE user_id=?", (user_id,))
+    conn.commit()
+    kb = ReplyKeyboardMarkup(
+        [[KeyboardButton("📱 Raqamni yuborish", request_contact=True)]],
+        resize_keyboard=True, one_time_keyboard=True,
+    )
+    await context.bot.send_message(
+        user_id,
+        "📋 *Ro'yxatdan o'tish*\n\nTelefon raqamingizni yuboring "
+        "(tugmani bosing yoki +998... ko'rinishida yozing):",
+        parse_mode="Markdown", reply_markup=kb,
+    )
+
+async def registration_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    conn = db()
+    row = conn.execute("SELECT reg_step FROM users WHERE user_id=?", (user.id,)).fetchone()
+    if not row or not row[0]:
+        conn.close()
+        return  # not in registration flow
+
+    step = row[0]
+    if step == "phone":
+        phone = None
+        if update.message.contact and update.message.contact.user_id == user.id:
+            phone = update.message.contact.phone_number
+        elif update.message.text:
+            cand = _re.sub(r"[^\d+]", "", update.message.text)
+            if _re.fullmatch(r"\+?\d{9,15}", cand):
+                phone = cand
+        if not phone:
+            await update.message.reply_text("❗️ Raqam noto'g'ri. +998901234567 ko'rinishida yuboring.")
+            conn.close()
+            return
+        conn.execute("UPDATE users SET phone=?, reg_step='school' WHERE user_id=?", (phone, user.id))
+        conn.commit()
+        await update.message.reply_text(
+            "🏫 Qaysi maktab/litseyda o'qiysiz? (nomini yozing)",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        conn.close()
+        return
+
+    if step == "school":
+        school = (update.message.text or "").strip()
+        if len(school) < 2:
+            await update.message.reply_text("❗️ Maktab nomini yozing.")
+            conn.close()
+            return
+        conn.execute("UPDATE users SET school=?, reg_step='done' WHERE user_id=?", (school, user.id))
+        conn.commit()
+        await credit_referrer_if_due(context, conn, user.id)
+        link = ref_link(context.bot.username, user.id)
+        await update.message.reply_text(welcome_text(link), parse_mode="Markdown")
+        conn.close()
+        return
+    conn.close()
+
+def is_registered(conn, user_id) -> bool:
+    r = conn.execute("SELECT reg_step FROM users WHERE user_id=?", (user_id,)).fetchone()
+    return bool(r and r[0] == "done")
+
 # ---------- Handlers ----------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -196,8 +270,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.close()
         return
 
-    await credit_referrer_if_due(context, conn, user.id)
+    if not is_registered(conn, user.id):
+        await start_registration(update, context, conn, user.id)
+        conn.close()
+        return
 
+    await credit_referrer_if_due(context, conn, user.id)
     link = ref_link(context.bot.username, user.id)
     await update.message.reply_text(welcome_text(link), parse_mode="Markdown")
     conn.close()
@@ -207,6 +285,10 @@ async def check_sub_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await q.answer()
     if await check_subscribed(context, q.from_user.id):
         conn = db()
+        if not is_registered(conn, q.from_user.id):
+            await start_registration(q, context, conn, q.from_user.id)
+            conn.close()
+            return
         await credit_referrer_if_due(context, conn, q.from_user.id)
         conn.close()
         link = ref_link(context.bot.username, q.from_user.id)
@@ -278,14 +360,14 @@ textarea{width:100%;min-height:70px}
 <h1>🎓 Marathon Admin</h1>
 <div class="cards" id="cards"></div>
 <div class="row">
-<input id="q" placeholder="Search name / username / ID" style="flex:1;min-width:200px">
+<input id="q" placeholder="Search name / username / school / ID" style="flex:1;min-width:200px">
 <button onclick="load()">Search</button>
 <button onclick="location.href='/admin/export.csv'">⬇ Export CSV</button>
 </div>
 <div><textarea id="bcast" placeholder="Broadcast message to all users..."></textarea>
 <div class="row" style="margin-top:8px"><button onclick="sendB()">📣 Send broadcast</button>
 <span id="bres" class="muted"></span></div></div>
-<table><thead><tr><th>User</th><th>Username</th><th>ID</th><th>Invites</th><th>Status</th><th>Joined</th></tr></thead>
+<table><thead><tr><th>User</th><th>Username</th><th>Phone</th><th>School</th><th>Invites</th><th>Status</th><th>Joined</th></tr></thead>
 <tbody id="tb"></tbody></table>
 <script>
 async function load(){
@@ -299,7 +381,7 @@ async function load(){
   const u=await (await fetch('/admin/api/users?q='+encodeURIComponent(q))).json();
   document.getElementById('tb').innerHTML=u.users.map(r=>
     `<tr><td>${r.full_name||''}</td><td>${r.username?'@'+r.username:''}</td>
-     <td class=muted>${r.user_id}</td><td>${r.invites}</td>
+     <td>${r.phone||''}</td><td>${r.school||''}</td><td>${r.invites}</td>
      <td>${r.unlocked?'<span class=ok>✅ unlocked</span>':(r.credited?'subscribed':'pending')}</td>
      <td class=muted>${(r.joined_at||'').slice(0,16)}</td></tr>`).join('');
 }
@@ -338,27 +420,27 @@ def api_users(q: str = "", _: bool = Depends(auth)):
     if q:
         like = f"%{q}%"
         rows = conn.execute(
-            """SELECT user_id, username, full_name, invites, unlocked, credited, joined_at
-               FROM users WHERE full_name LIKE ? OR username LIKE ? OR CAST(user_id AS TEXT) LIKE ?
-               ORDER BY invites DESC LIMIT 200""", (like, like, like)).fetchall()
+            """SELECT user_id, username, full_name, phone, school, invites, unlocked, credited, joined_at
+               FROM users WHERE full_name LIKE ? OR username LIKE ? OR school LIKE ? OR CAST(user_id AS TEXT) LIKE ?
+               ORDER BY invites DESC LIMIT 200""", (like, like, like, like)).fetchall()
     else:
         rows = conn.execute(
-            """SELECT user_id, username, full_name, invites, unlocked, credited, joined_at
+            """SELECT user_id, username, full_name, phone, school, invites, unlocked, credited, joined_at
                FROM users ORDER BY invites DESC LIMIT 200""").fetchall()
     conn.close()
-    keys = ["user_id", "username", "full_name", "invites", "unlocked", "credited", "joined_at"]
+    keys = ["user_id", "username", "full_name", "phone", "school", "invites", "unlocked", "credited", "joined_at"]
     return {"users": [dict(zip(keys, r)) for r in rows]}
 
 @web.get("/admin/export.csv")
 def export_csv(_: bool = Depends(auth)):
     conn = db()
     rows = conn.execute(
-        "SELECT user_id, username, full_name, referrer_id, invites, credited, unlocked, joined_at FROM users"
+        "SELECT user_id, username, full_name, phone, school, referrer_id, invites, credited, unlocked, joined_at FROM users"
     ).fetchall()
     conn.close()
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(["user_id", "username", "full_name", "referrer_id", "invites", "subscribed", "unlocked", "joined_at"])
+    w.writerow(["user_id", "username", "full_name", "phone", "school", "referrer_id", "invites", "registered", "unlocked", "joined_at"])
     w.writerows(rows)
     buf.seek(0)
     return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
@@ -395,6 +477,7 @@ def main():
     app.add_handler(CommandHandler("status", status))
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CallbackQueryHandler(check_sub_callback, pattern="^check_sub$"))
+    app.add_handler(MessageHandler((filters.TEXT | filters.CONTACT) & ~filters.COMMAND, registration_handler))
     log.info(f"Marathon bot running, admin panel on :{PORT}/admin")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
